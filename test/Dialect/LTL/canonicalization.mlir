@@ -25,8 +25,8 @@ func.func @DelayFolds(%arg0: !ltl.sequence, %arg1: i1) {
 
   // delay(delay(s, 1, N), 2) -> delay(s, 3)
   // N is dropped
-  // CHECK-NEXT: ltl.delay %arg0, 3 :
-  // CHECK-NEXT: ltl.delay %arg0, 3 :
+  // CHECK-NEXT: ltl.delay {{%.+}}, 3 :
+  // CHECK-NEXT: ltl.delay {{%.+}}, 3 :
   // CHECK-NEXT: call
   // CHECK-NEXT: call
   %3 = ltl.delay %arg0, 1, 0 : !ltl.sequence

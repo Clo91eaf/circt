@@ -46,6 +46,58 @@ namespace patterns {
 #include "circt/Dialect/LTL/LTLFolds.cpp.inc"
 } // namespace patterns
 
+namespace {
+struct MergeNestedDelays : OpRewritePattern<DelayOp> {
+  using OpRewritePattern<DelayOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(DelayOp op,
+                                PatternRewriter &rewriter) const override {
+    auto inner = op.getInput().getDefiningOp<DelayOp>();
+    if (!inner)
+      return failure();
+
+    IntegerAttr mergedDelay =
+        rewriter.getI64IntegerAttr(inner.getDelay() + op.getDelay());
+    IntegerAttr mergedLength;
+    if (inner.getLength() && op.getLength())
+      mergedLength =
+          rewriter.getI64IntegerAttr(*inner.getLength() + *op.getLength());
+
+    auto newDelay = DelayOp::create(rewriter, op.getLoc(), inner.getInput(),
+                                    mergedDelay, mergedLength);
+    rewriter.replaceOp(op, newDelay.getResult());
+    return success();
+  }
+};
+
+struct MergeNestedClockedDelays : OpRewritePattern<ClockedDelayOp> {
+  using OpRewritePattern<ClockedDelayOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ClockedDelayOp op,
+                                PatternRewriter &rewriter) const override {
+    auto inner = op.getInput().getDefiningOp<ClockedDelayOp>();
+    if (!inner)
+      return failure();
+
+    if (op.getClock() != inner.getClock() || op.getEdge() != inner.getEdge())
+      return failure();
+
+    IntegerAttr mergedDelay =
+        rewriter.getI64IntegerAttr(inner.getDelay() + op.getDelay());
+    IntegerAttr mergedLength;
+    if (inner.getLength() && op.getLength())
+      mergedLength =
+          rewriter.getI64IntegerAttr(*inner.getLength() + *op.getLength());
+
+    auto newDelay = ClockedDelayOp::create(
+        rewriter, op.getLoc(), inner.getInput(), mergedDelay, mergedLength,
+        op.getClock(), op.getEdgeAttr());
+    rewriter.replaceOp(op, newDelay.getResult());
+    return success();
+  }
+};
+} // namespace
+
 //===----------------------------------------------------------------------===//
 // AndOp / OrOp / IntersectOp
 //===----------------------------------------------------------------------===//
@@ -79,19 +131,38 @@ LogicalResult IntersectOp::canonicalize(IntersectOp op,
 // DelayOp
 //===----------------------------------------------------------------------===//
 
-OpFoldResult DelayOp::fold(FoldAdaptor adaptor) {
+template <typename DelayLikeOp, typename FoldAdaptorT>
+static OpFoldResult foldDelayLike(DelayLikeOp op, FoldAdaptorT adaptor) {
   // delay(s, 0, 0) -> s
   if (adaptor.getDelay() == 0 && adaptor.getLength() == 0 &&
-      isa<SequenceType>(getInput().getType()))
-    return getInput();
+      isa<SequenceType>(op.getInput().getType()))
+    return op.getInput();
 
   return {};
 }
 
+OpFoldResult DelayOp::fold(FoldAdaptor adaptor) {
+  return foldDelayLike(*this, adaptor);
+}
+
 void DelayOp::getCanonicalizationPatterns(RewritePatternSet &results,
                                           MLIRContext *context) {
-  results.add<patterns::NestedDelays>(results.getContext());
+  results.add<MergeNestedDelays>(results.getContext());
   results.add<patterns::MoveDelayIntoConcat>(results.getContext());
+}
+
+//===----------------------------------------------------------------------===//
+// ClockedDelayOp
+//===----------------------------------------------------------------------===//
+
+OpFoldResult ClockedDelayOp::fold(FoldAdaptor adaptor) {
+  return foldDelayLike(*this, adaptor);
+}
+
+void ClockedDelayOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                                 MLIRContext *context) {
+  results.add<MergeNestedClockedDelays>(results.getContext());
+  results.add<patterns::MoveClockedDelayIntoConcat>(results.getContext());
 }
 
 //===----------------------------------------------------------------------===//

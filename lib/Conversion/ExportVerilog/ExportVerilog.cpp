@@ -2304,8 +2304,7 @@ private:
 
   /// Emit braced list of values surrounded by `{` and `}`.
   void emitBracedList(ValueRange ops) {
-    return emitBracedList(
-        ops, [&]() { ps << "{"; }, [&]() { ps << "}"; });
+    return emitBracedList(ops, [&]() { ps << "{"; }, [&]() { ps << "}"; });
   }
 
   /// Print an APInt constant.
@@ -3583,6 +3582,7 @@ private:
   EmittedProperty visitLTL(ltl::OrOp op);
   EmittedProperty visitLTL(ltl::IntersectOp op);
   EmittedProperty visitLTL(ltl::DelayOp op);
+  EmittedProperty visitLTL(ltl::ClockedDelayOp op);
   EmittedProperty visitLTL(ltl::ConcatOp op);
   EmittedProperty visitLTL(ltl::RepeatOp op);
   EmittedProperty visitLTL(ltl::GoToRepeatOp op);
@@ -3603,6 +3603,12 @@ private:
   /// location information tracking.
   SmallPtrSetImpl<Operation *> &emittedOps;
 
+  /// Current clock context from enclosing ltl.clock op. Used to verify that
+  /// ltl.clocked_delay ops have consistent clocks, since SVA does not support
+  /// per-delay clocks.
+  Value currentClock;
+  std::optional<ltl::ClockEdge> currentEdge;
+
   /// Tokens buffered for inserting casts/parens after emitting children.
   SmallVector<Token> localTokens;
 
@@ -3613,6 +3619,43 @@ private:
   TokenStreamWithCallback<OpLocMap, CallbackDataTy, BufferingPP> ps;
 };
 } // end anonymous namespace
+
+/// Walk a property tree and find the clock/edge from the first
+/// ltl.clocked_delay op. Returns nullopt if no such delay exists or if the
+/// property already has an enclosing ltl.clock.
+static std::optional<std::pair<Value, ltl::ClockEdge>>
+extractDelayClockFromProperty(Value property) {
+  DenseSet<Operation *> visited;
+  SmallVector<Value> worklist;
+  worklist.push_back(property);
+
+  while (!worklist.empty()) {
+    Value val = worklist.pop_back_val();
+    auto *op = val.getDefiningOp();
+    if (!op || visited.contains(op))
+      continue;
+    visited.insert(op);
+
+    // If there's an ltl.clock op, the user already specified the clock.
+    if (isa<ltl::ClockOp>(op))
+      return std::nullopt;
+
+    if (auto delayOp = dyn_cast<ltl::ClockedDelayOp>(op))
+      return std::make_pair(delayOp.getClock(), delayOp.getEdge());
+
+    if (auto delayOp = dyn_cast<ltl::DelayOp>(op)) {
+      worklist.push_back(delayOp.getInput());
+      continue;
+    }
+
+    // Recurse into operands of LTL ops.
+    if (isa<ltl::SequenceType, ltl::PropertyType>(val.getType())) {
+      for (Value operand : op->getOperands())
+        worklist.push_back(operand);
+    }
+  }
+  return std::nullopt;
+}
 
 // Emits a disable signal and its containing property.
 // This function can be called from withing another emission process in which
@@ -3642,6 +3685,27 @@ void PropertyEmitter::emitAssertPropertyBody(
     PropertyPrecedence parenthesizeIfLooserThan) {
   assert(localTokens.empty());
 
+  // If the property tree contains ltl.clocked_delay ops but no
+  // enclosing ltl.clock, hoist the clock to the outermost level as
+  // @(edge clock), since SVA requires clocks at the property level.
+  if (auto clockInfo = extractDelayClockFromProperty(property)) {
+    auto [clock, edge] = *clockInfo;
+    auto svaEdge = edge == ltl::ClockEdge::Pos   ? sv::EventControl::AtPosEdge
+                   : edge == ltl::ClockEdge::Neg ? sv::EventControl::AtNegEdge
+                                                 : sv::EventControl::AtEdge;
+    ps << "@(";
+    ps.scopedBox(PP::ibox2, [&] {
+      ps << PPExtString(stringifyEventControl(svaEdge)) << PP::space;
+      emitNestedProperty(clock, PropertyPrecedence::Lowest);
+      ps << ")";
+    });
+    ps << PP::space;
+
+    // Set clock context so delay validation can check consistency.
+    currentClock = clock;
+    currentEdge = edge;
+  }
+
   emitAssertPropertyDisable(property, disable, parenthesizeIfLooserThan);
 
   // If we are not using an external token buffer provided through the
@@ -3663,6 +3727,13 @@ void PropertyEmitter::emitAssertPropertyBody(
     ps << ")";
   });
   ps << PP::space;
+
+  // Set clock context so delay consistency checks work.
+  currentClock = clock;
+  auto ltlEdge = event == sv::EventControl::AtPosEdge   ? ltl::ClockEdge::Pos
+                 : event == sv::EventControl::AtNegEdge ? ltl::ClockEdge::Neg
+                                                        : ltl::ClockEdge::Both;
+  currentEdge = ltlEdge;
 
   // Emit the rest of the body
   emitAssertPropertyDisable(property, disable, parenthesizeIfLooserThan);
@@ -3779,12 +3850,52 @@ EmittedProperty PropertyEmitter::visitLTL(ltl::DelayOp op) {
   return {PropertyPrecedence::Concat};
 }
 
+EmittedProperty PropertyEmitter::visitLTL(ltl::ClockedDelayOp op) {
+  // Verify consistency with the enclosing clock context. SVA does not support
+  // per-delay clocks; all delays inherit from the enclosing @(edge clock).
+  if (currentClock) {
+    if (op.getClock() != currentClock) {
+      emitOpError(op, "delay clock does not match enclosing clock; "
+                      "SVA does not support per-delay clocks");
+    } else if (currentEdge && op.getEdge() != *currentEdge) {
+      emitOpError(op, "delay clock edge does not match enclosing clock edge");
+    }
+  }
+
+  ps << "##";
+  if (auto length = op.getLength()) {
+    if (*length == 0) {
+      ps.addAsString(op.getDelay());
+    } else {
+      ps << "[";
+      ps.addAsString(op.getDelay());
+      ps << ":";
+      ps.addAsString(op.getDelay() + *length);
+      ps << "]";
+    }
+  } else {
+    if (op.getDelay() == 0) {
+      ps << "[*]";
+    } else if (op.getDelay() == 1) {
+      ps << "[+]";
+    } else {
+      ps << "[";
+      ps.addAsString(op.getDelay());
+      ps << ":$]";
+    }
+  }
+  ps << PP::space;
+  emitNestedProperty(op.getInput(), PropertyPrecedence::Concat);
+  return {PropertyPrecedence::Concat};
+}
+
 void PropertyEmitter::emitLTLConcat(ValueRange inputs) {
   bool addSeparator = false;
   for (auto input : inputs) {
     if (addSeparator) {
       ps << PP::space;
-      if (!input.getDefiningOp<ltl::DelayOp>())
+      if (!input.getDefiningOp<ltl::DelayOp>() &&
+          !input.getDefiningOp<ltl::ClockedDelayOp>())
         ps << "##0" << PP::space;
     }
     addSeparator = true;
@@ -3863,10 +3974,22 @@ static ValueRange getNonOverlappingConcatSubrange(Value value) {
   auto concatOp = value.getDefiningOp<ltl::ConcatOp>();
   if (!concatOp || concatOp.getInputs().size() < 2)
     return {};
-  auto delayOp = concatOp.getInputs().back().getDefiningOp<ltl::DelayOp>();
-  if (!delayOp || delayOp.getDelay() != 1 || delayOp.getLength() != 0)
+  auto delayedValue = concatOp.getInputs().back();
+  Value delayedInput;
+
+  if (auto delayOp = delayedValue.getDefiningOp<ltl::DelayOp>()) {
+    if (delayOp.getDelay() != 1 || delayOp.getLength() != 0)
+      return {};
+    delayedInput = delayOp.getInput();
+  } else if (auto delayOp = delayedValue.getDefiningOp<ltl::ClockedDelayOp>()) {
+    if (delayOp.getDelay() != 1 || delayOp.getLength() != 0)
+      return {};
+    delayedInput = delayOp.getInput();
+  } else {
     return {};
-  auto constOp = delayOp.getInput().getDefiningOp<ConstantOp>();
+  }
+
+  auto constOp = delayedInput.getDefiningOp<ConstantOp>();
   if (!constOp || !constOp.getValue().isOne())
     return {};
   return concatOp.getInputs().drop_back();
@@ -3907,7 +4030,18 @@ EmittedProperty PropertyEmitter::visitLTL(ltl::ClockOp op) {
     ps << ")";
   });
   ps << PP::space;
+
+  // Set the clock context for nested property emission.
+  // Save and restore to handle nested clock ops correctly.
+  Value savedClock = currentClock;
+  auto savedEdge = currentEdge;
+  currentClock = op.getClock();
+  currentEdge = op.getEdge();
+
   emitNestedProperty(op.getInput(), PropertyPrecedence::Clocking);
+
+  currentClock = savedClock;
+  currentEdge = savedEdge;
   return {PropertyPrecedence::Clocking};
 }
 
