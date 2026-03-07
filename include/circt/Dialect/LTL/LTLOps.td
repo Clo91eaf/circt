@@ -63,6 +63,47 @@ def IntersectOp : AssocLTLOp<"intersect"> {
 }
 
 //===----------------------------------------------------------------------===//
+// Clocking
+//===----------------------------------------------------------------------===//
+
+// Edge behavior enum for always block.  See SV Spec 9.4.2.
+
+/// AtPosEdge triggers on a rise from 0 to 1/X/Z, or X/Z to 1.
+def AtPosEdge: I32EnumAttrCase<"Pos", 0, "posedge">;
+/// AtNegEdge triggers on a drop from 1 to 0/X/Z, or X/Z to 0.
+def AtNegEdge: I32EnumAttrCase<"Neg", 1, "negedge">;
+/// AtEdge is syntactic sugar for AtPosEdge or AtNegEdge.
+def AtEdge   : I32EnumAttrCase<"Both", 2, "edge">;
+
+def ClockEdgeAttr : I32EnumAttr<"ClockEdge", "clock edge",
+                                [AtPosEdge, AtNegEdge, AtEdge]> {
+  let cppNamespace = "circt::ltl";
+}
+
+def ClockOp : LTLOp<"clock", [
+  Pure, InferTypeOpInterface, DeclareOpInterfaceMethods<InferTypeOpInterface>
+]> {
+  let arguments = (ins LTLAnyPropertyType:$input, ClockEdgeAttr:$edge, I1:$clock);
+  let results = (outs LTLSequenceOrPropertyType:$result);
+  let assemblyFormat = [{
+    $input `,` $edge $clock attr-dict `:` type($input)
+  }];
+
+  let summary = "Specify the clock for a property or sequence.";
+  let description = [{
+    Specifies the `$edge` on a given `$clock` to be the clock for an `$input`
+    property or sequence. All cycle delays in the `$input` implicitly refer to a
+    clock that advances the state to the next cycle. The `ltl.clock` operation
+    provides that clock. The clock applies to the entire property or sequence
+    expression tree below `$input`, up to any other nested `ltl.clock`
+    operations.
+
+    The operation returns a property if the `$input` is a property, and a
+    sequence otherwise.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // Sequences
 //===----------------------------------------------------------------------===//
 
@@ -70,10 +111,12 @@ def DelayOp : LTLOp<"delay", [Pure]> {
   let arguments = (ins
     LTLAnySequenceType:$input,
     I64Attr:$delay,
-    OptionalAttr<I64Attr>:$length);
+    OptionalAttr<I64Attr>:$length,
+    Optional<I1>:$clock,
+    OptionalAttr<ClockEdgeAttr>:$edge);
   let results = (outs LTLSequenceType:$result);
   let assemblyFormat = [{
-    $input `,` $delay (`,` $length^)? attr-dict `:` type($input)
+    $input `,` $delay (`,` $length^)? (`clock` $clock^ `,` $edge)? attr-dict `:` type($input)
   }];
   let hasFolder = 1;
   let hasCanonicalizer = 1;
@@ -83,25 +126,32 @@ def DelayOp : LTLOp<"delay", [Pure]> {
     Delays the `$input` sequence by the number of cycles specified by `$delay`.
     The delay must be greater than or equal to zero. The optional `$length`
     specifies during how many cycles after the initial delay the sequence can
-    match. Omitting `$length` indicates an unbounded but finite delay. For
-    example:
+    match. Omitting `$length` indicates an unbounded but finite delay.
 
-    - `ltl.delay %seq, 2, 0` delays `%seq` by exactly 2 cycles. The resulting
-      sequence matches if `%seq` matches exactly 2 cycles in the future.
-    - `ltl.delay %seq, 2, 2` delays `%seq` by 2, 3, or 4 cycles. The resulting
-      sequence matches if `%seq` matches 2, 3, or 4 cycles in the future.
-    - `ltl.delay %seq, 2` delays `%seq` by 2 or more cycles. The number of
-      cycles is unbounded but finite, which means that `%seq` *has* to match at
-      some point, instead of effectively never occuring by being delayed an
-      infinite number of cycles.
+    The optional `$clock` and `$edge` specify an explicit clock for the delay.
+    When omitted, the delay is "unclocked" and must be resolved by an enclosing
+    `ltl.clock` operation or by the `InferLTLClocks` pass.
+
+    For example:
+
+    - `ltl.delay %seq, 2, 0` delays `%seq` by exactly 2 cycles (unclocked).
+    - `ltl.delay %seq, 2, 0 clock %clk, posedge` delays `%seq` by exactly 2
+      cycles on the positive edge of `%clk`.
+    - `ltl.delay %seq, 2, 2` delays `%seq` by 2, 3, or 4 cycles.
+    - `ltl.delay %seq, 2` delays `%seq` by 2 or more cycles (unbounded but
+      finite).
     - `ltl.delay %seq, 0, 0` is equivalent to just `%seq`.
 
     #### Clocking
 
-    The cycle delay specified on the operation refers to a clocking event. This
-    event is not directly specified by the delay operation itself. Instead, the
-    [`ltl.clock`](#ltlclock-circtltlclockop) operation can be used to associate
-    all delays within a sequence with a clock.
+    When the `$clock` and `$edge` are present, the delay explicitly refers to
+    that clock signal. When absent, the delay is unclocked and the
+    `InferLTLClocks` pass (`--ltl-infer-clocks`) will propagate clock
+    information from enclosing `ltl.clock` ops.
+
+    Backends (e.g., ExportVerilog) may auto-hoist a clock from explicitly
+    clocked delays to the outermost SVA level when no enclosing `ltl.clock`
+    is present.
   }];
 }
 
@@ -365,47 +415,6 @@ def EventuallyOp : LTLOp<"eventually", [Pure]> {
     is strong: it requires that the `$input` holds after a *finite* number of
     cycles. The operator does *not* hold if the `$input` can't hold in the
     future.
-  }];
-}
-
-//===----------------------------------------------------------------------===//
-// Clocking
-//===----------------------------------------------------------------------===//
-
-// Edge behavior enum for always block.  See SV Spec 9.4.2.
-
-/// AtPosEdge triggers on a rise from 0 to 1/X/Z, or X/Z to 1.
-def AtPosEdge: I32EnumAttrCase<"Pos", 0, "posedge">;
-/// AtNegEdge triggers on a drop from 1 to 0/X/Z, or X/Z to 0.
-def AtNegEdge: I32EnumAttrCase<"Neg", 1, "negedge">;
-/// AtEdge is syntactic sugar for AtPosEdge or AtNegEdge.
-def AtEdge   : I32EnumAttrCase<"Both", 2, "edge">;
-
-def ClockEdgeAttr : I32EnumAttr<"ClockEdge", "clock edge",
-                                [AtPosEdge, AtNegEdge, AtEdge]> {
-  let cppNamespace = "circt::ltl";
-}
-
-def ClockOp : LTLOp<"clock", [
-  Pure, InferTypeOpInterface, DeclareOpInterfaceMethods<InferTypeOpInterface>
-]> {
-  let arguments = (ins LTLAnyPropertyType:$input, ClockEdgeAttr:$edge, I1:$clock);
-  let results = (outs LTLSequenceOrPropertyType:$result);
-  let assemblyFormat = [{
-    $input `,` $edge $clock attr-dict `:` type($input)
-  }];
-
-  let summary = "Specify the clock for a property or sequence.";
-  let description = [{
-    Specifies the `$edge` on a given `$clock` to be the clock for an `$input`
-    property or sequence. All cycle delays in the `$input` implicitly refer to a
-    clock that advances the state to the next cycle. The `ltl.clock` operation
-    provides that clock. The clock applies to the entire property or sequence
-    expression tree below `$input`, up to any other nested `ltl.clock`
-    operations.
-
-    The operation returns a property if the `$input` is a property, and a
-    sequence otherwise.
   }];
 }
 

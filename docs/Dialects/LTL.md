@@ -160,6 +160,26 @@ Sequence and property expressions in SVAs can specify a clock with respect to wh
 - `@(negedge clk) seqOrProp`. **Trigger on high-to-low clock edge.** Equivalent to `ltl.clock %seqOrProp, negedge %clk`.
 - `@(edge clk) seqOrProp`. **Trigger on any clock edge.** Equivalent to `ltl.clock %seqOrProp, edge %clk`.
 
+#### Delay clocking
+
+`ltl.delay` takes the delayed input first, followed by the delay window. An optional clocking clause may be appended:
+
+```
+ltl.delay %input, <delay>[, <length>] [clock %clock, <edge>]
+```
+
+`%clock` is an optional `i1` value (e.g. a module clock); `<edge>` is `posedge`, `negedge`, or `edge`. When present, the `delay`/`length` are counted on the specified clock/edge. For example, `ltl.delay %s, 3 clock %clk, posedge` means `%s` must hold 3 cycles later on `%clk` rising edges. 
+
+When the clocking clause is omitted, the delay is unclocked and may be resolved by an enclosing `ltl.clock` or by the `InferLTLClocks` pass. `ltl.clock` globally associates a sequence/property with a clock/edge; using the same pair in `ltl.delay` keeps expressions in the same clocking domain.
+
+Examples:
+
+```mlir
+ltl.delay %s, 3
+ltl.delay %s, 3, 0
+ltl.delay %s, 3, 0 clock %clk, posedge
+```
+
 
 ### Disable Iff
 
@@ -273,13 +293,13 @@ where the `logic_to_int` conversion is only necessary if `%cond` is 4-valued.
 ```mlir
 %ds1 = ltl.delay %s1, 1
 %s1s2 = ltl.concat %ds1, %s2 : !ltl.sequence  
-```  
+```
 
 - **`s1 ##[*] s2`**:   
 ```mlir
 %ds1 = ltl.delay %s1, 0
 %s1s2 = ltl.concat %ds1, %s2 : !ltl.sequence  
-```  
+```
 
 - **`s1 and s2`**:   
 ```mlir
@@ -369,12 +389,12 @@ ltl.not %s1 : !ltl.sequence
 - **`nexttime p`**:   
 ```mlir
 ltl.delay %p, 1, 0 : !ltl.sequence   
-```  
+```
 
 - **`nexttime[n] p`**:  
 ```mlir
 ltl.delay %p, n, 0 : !ltl.sequence   
-```  
+```
 
 - **`s_nexttime p`**: not really distinguishable from the weak version in CIRCT.
 - **`s_nexttime[n] p`**: not really distinguishable from the weak version in CIRCT.
