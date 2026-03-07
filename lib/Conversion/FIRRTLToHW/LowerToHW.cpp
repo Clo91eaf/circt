@@ -4717,7 +4717,8 @@ LogicalResult FIRRTLLowering::visitExpr(LTLIntersectIntrinsicOp op) {
 
 LogicalResult FIRRTLLowering::visitExpr(LTLDelayIntrinsicOp op) {
   return setLoweringToLTL<ltl::DelayOp>(op, getLoweredValue(op.getInput()),
-                                        op.getDelayAttr(), op.getLengthAttr());
+                                        op.getDelayAttr(), op.getLengthAttr(),
+                                        Value{}, ltl::ClockEdgeAttr{});
 }
 
 LogicalResult FIRRTLLowering::visitExpr(LTLConcatIntrinsicOp op) {
