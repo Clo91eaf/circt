@@ -248,3 +248,23 @@ func.func @ImplicationFolds(%a: i1) -> (!ltl.property, !ltl.property) {
   // CHECK: return %[[PROP]], %[[PROP]]
   return %0, %1 : !ltl.property, !ltl.property
 }
+
+// CHECK-LABEL: @ClockCanonicalization
+// CHECK-SAME: (%[[I:.+]]: i1, %[[S:.+]]: !ltl.sequence, %[[P:.+]]: !ltl.property, %[[CLK:.+]]: i1)
+func.func @ClockCanonicalization(%arg0: i1, %arg1: !ltl.sequence, %arg2: !ltl.property, %clk: i1) {
+  // clock(i1) -> clocked_atom(i1)
+  // clock(sequence/property) stays as a clocking scope.
+  // CHECK-NEXT: %[[ATOM:.+]] = ltl.clocked_atom %[[I]], posedge %[[CLK]] : i1
+  // CHECK-NEXT: %[[SEQ:.+]] = ltl.clock %[[S]], posedge %[[CLK]] : !ltl.sequence
+  // CHECK-NEXT: %[[PROP:.+]] = ltl.clock %[[P]], posedge %[[CLK]] : !ltl.property
+  // CHECK-NEXT: call @Seq(%[[ATOM]])
+  // CHECK-NEXT: call @Seq(%[[SEQ]])
+  // CHECK-NEXT: call @Prop(%[[PROP]])
+  %0 = ltl.clock %arg0, posedge %clk : i1
+  %1 = ltl.clock %arg1, posedge %clk : !ltl.sequence
+  %2 = ltl.clock %arg2, posedge %clk : !ltl.property
+  call @Seq(%0) : (!ltl.sequence) -> ()
+  call @Seq(%1) : (!ltl.sequence) -> ()
+  call @Prop(%2) : (!ltl.property) -> ()
+  return
+}

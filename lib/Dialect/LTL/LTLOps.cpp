@@ -71,6 +71,21 @@ IntersectOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
 // ClockOp
 //===----------------------------------------------------------------------===//
 
+namespace {
+struct ClockedAtomCanonicalization : public OpRewritePattern<ClockOp> {
+  using OpRewritePattern<ClockOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ClockOp op,
+                                PatternRewriter &rewriter) const override {
+    if (!op.getInput().getType().isInteger(1))
+      return failure();
+    rewriter.replaceOpWithNewOp<ClockedAtomOp>(op, op.getInput(), op.getEdge(),
+                                               op.getClock());
+    return success();
+  }
+};
+} // namespace
+
 LogicalResult
 ClockOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
                           ValueRange operands, DictionaryAttr attributes,
@@ -82,4 +97,9 @@ ClockOp::inferReturnTypes(MLIRContext *context, std::optional<Location> loc,
     inferredReturnTypes.push_back(SequenceType::get(context));
   }
   return success();
+}
+
+void ClockOp::getCanonicalizationPatterns(RewritePatternSet &results,
+                                          MLIRContext *context) {
+  results.add<ClockedAtomCanonicalization>(context);
 }
