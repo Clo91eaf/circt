@@ -4751,9 +4751,12 @@ LogicalResult FIRRTLLowering::visitExpr(LTLPastIntrinsicOp op) {
 }
 
 LogicalResult FIRRTLLowering::visitExpr(LTLClockIntrinsicOp op) {
-  return setLoweringToLTL<ltl::ClockOp>(op, getLoweredValue(op.getInput()),
-                                        ltl::ClockEdge::Pos,
-                                        getLoweredNonClockValue(op.getClock()));
+  auto input = getLoweredValue(op.getInput());
+  auto clock = getLoweredNonClockValue(op.getClock());
+  if (input.getType().isInteger(1))
+    return setLoweringToLTL<ltl::ClockedAtomOp>(op, input, ltl::ClockEdge::Pos,
+                                                clock);
+  return setLoweringToLTL<ltl::ClockOp>(op, input, ltl::ClockEdge::Pos, clock);
 }
 
 template <typename TargetOp, typename IntrinsicOp>

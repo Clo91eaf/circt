@@ -271,8 +271,10 @@ def CirctLTLPast : FIRRTLIntrinsic {
 def CirctLTLClock : FIRRTLIntrinsic {
   let mnemonic = "circt.ltl.clock";
   let description = [{
-    Associates a clock with a boolean or sequence. This is used to indicate the
-    clock domain in which a property is evaluated.
+    Associates a clock with a boolean, sequence, or property. Boolean operands
+    lower to `ltl.clocked_atom`; sequence and property operands lower to
+    `ltl.clock`. This is used to indicate the clock domain in which a property
+    is evaluated.
 
     | Argument | Type    | Description               |
     | -------- | ------- | ------------------------- |

@@ -109,6 +109,9 @@ firrtl.circuit "Intrinsics" {
 
     // CHECK-NEXT: [[K0:%.+]] = ltl.clock [[I0]], posedge [[CLK]] : !ltl.property
     %k0 = firrtl.int.ltl.clock %i0, %clk : (!firrtl.uint<1>, !firrtl.clock) -> !firrtl.uint<1>
+    
+    // CHECK-NEXT: [[K1:%.+]] = ltl.clocked_atom %a, posedge [[CLK]] : i1
+    %k1 = firrtl.int.ltl.clock %a, %clk : (!firrtl.uint<1>, !firrtl.clock) -> !firrtl.uint<1>
 
     // CHECK-NEXT: verif.assert %a : i1
     firrtl.int.verif.assert %a : !firrtl.uint<1>
