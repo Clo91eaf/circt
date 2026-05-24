@@ -67,7 +67,7 @@ private:
 
       if (operandIt == op->operand_end()) {
         // Check that our property doesn't contain any illegal ops
-        if (isa<ltl::ClockOp>(op)) {
+        if (isa<ltl::ClockOp, ltl::ClockedAtomOp>(op)) {
           op->emitError("Nested clock or disable operations are not "
                         "allowed for clock_assertlike operations.");
           return;

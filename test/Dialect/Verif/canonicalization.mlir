@@ -80,6 +80,13 @@ hw.module @AssertLowerToClocked(in %clock : i1, in %a : i1, in %en : i1) {
   verif.assert %clk if %en : !ltl.sequence
 }
 
+// CHECK-LABEL: @AssertLowerAtomToClocked
+hw.module @AssertLowerAtomToClocked(in %clock : i1, in %a : i1, in %en : i1) {
+  // CHECK: verif.clocked_assert %a if %en, posedge %clock : i1
+  %atom = ltl.clocked_atom %a, posedge %clock : i1
+  verif.assert %atom if %en : !ltl.sequence
+}
+
 //===----------------------------------------------------------------------===//
 // AssumeOp
 //===----------------------------------------------------------------------===//

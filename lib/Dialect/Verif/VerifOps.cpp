@@ -131,20 +131,33 @@ struct EraseIfPropertyTrue : public OpRewritePattern<Op> {
   }
 };
 
-/// Convert `op(ltl.clock(prop, clk), en)` to `clocked_op(prop, en, clk)`.
+/// Convert `op(ltl.clock(prop, clk), en)` or
+/// `op(ltl.clocked_atom(prop, clk), en)` to `clocked_op(prop, en, clk)`.
 template <typename TargetOp, typename Op>
 struct LowerToClocked : public OpRewritePattern<Op> {
   using OpRewritePattern<Op>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(Op op,
                                 PatternRewriter &rewriter) const override {
-    auto clockOp = op.getProperty().template getDefiningOp<ltl::ClockOp>();
-    if (!clockOp)
+    auto property = op.getProperty();
+    Value input, clock;
+    ltl::ClockEdge edge;
+    if (auto clockOp = property.template getDefiningOp<ltl::ClockOp>()) {
+      input = clockOp.getInput();
+      edge = clockOp.getEdge();
+      clock = clockOp.getClock();
+    } else if (auto atomOp =
+                   property.template getDefiningOp<ltl::ClockedAtomOp>()) {
+      input = atomOp.getInput();
+      edge = atomOp.getEdge();
+      clock = atomOp.getClock();
+    } else {
       return failure();
+    }
 
-    rewriter.replaceOpWithNewOp<TargetOp>(
-        op, clockOp.getInput(), ltlToVerifClockEdge(clockOp.getEdge()),
-        clockOp.getClock(), op.getEnable(), op.getLabelAttr());
+    rewriter.replaceOpWithNewOp<TargetOp>(op, input, ltlToVerifClockEdge(edge),
+                                          clock, op.getEnable(),
+                                          op.getLabelAttr());
     return success();
   }
 };

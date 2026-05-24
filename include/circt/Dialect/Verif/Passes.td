@@ -95,8 +95,8 @@ def VerifyClockedAssertLikePass : Pass<"verify-clocked-assert-like",
   let summary = "Check that clocked-assert-like are valid";
   let description = [{
     Checks that every `clocked_assert`, `clocked_assume` or `clocked_cover` op
-    does not contain a nested `ltl.clock` or `ltl.disable` operation in its
-    operand tree.
+    does not contain a nested `ltl.clock`, `ltl.clocked_atom` or `ltl.disable`
+    operation in its operand tree.
   }];
 }
 

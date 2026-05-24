@@ -32,6 +32,14 @@ hw.module @verifyClocks2(in %clk: i1, in %a: i1, in %b: i1) {
 
 // -----
 
+hw.module @verifyClockedAtom(in %clk: i1, in %a: i1, in %b: i1) {
+  // expected-error @below {{Nested clock or disable operations are not allowed for clock_assertlike operations.}}
+  %clocked = ltl.clocked_atom %a, posedge %clk : i1
+  verif.clocked_assert %clocked if %b, posedge %clk : !ltl.sequence
+}
+
+// -----
+
 hw.module @deeplynested(in %clk: i1, in %a: i1, in %b: i1) {
   %n0 = ltl.not %a : i1
   // expected-error @below {{Nested clock or disable operations are not allowed for clock_assertlike operations.}}
