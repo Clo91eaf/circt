@@ -136,6 +136,8 @@ struct LTLClockControlVisitor {
     expr = context.convertToI1(expr);
     if (!expr)
       return Value{};
+    if (seqOrPro.getType().isInteger(1))
+      return ltl::ClockedAtomOp::create(builder, loc, seqOrPro, edge, expr);
     return ltl::ClockOp::create(builder, loc, seqOrPro, edge, expr);
   }
 
